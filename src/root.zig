@@ -168,26 +168,43 @@ pub fn XorList(T: type) type {
         };
 
         pub const Iterator = struct {
-            current_ptr: ?*Node,
+            next_ptr: ?*Node,
             previous_addr: usize,
 
             pub fn init(first_node: ?*Node, previous_addr: usize) Iterator {
                 return .{
-                    .current_ptr = first_node,
+                    .next_ptr = first_node,
                     .previous_addr = previous_addr,
                 };
             }
 
             pub fn next(self: *Iterator) ?*Node {
-                if (self.current_ptr) |current| {
-                    const result = self.current_ptr;
-                    const next_ptr = current.nextNode(self.previous_addr);
-                    self.previous_addr = @intFromPtr(current);
-                    self.current_ptr = next_ptr;
-
-                    return result;
+                const result = self.next_ptr;
+                if (self.next_ptr) |next_ptr| {
+                    const curr_addr = @intFromPtr(next_ptr);
+                    const next_addr = self.previous_addr ^ next_ptr.xptr;
+                    self.next_ptr = @ptrFromInt(next_addr);
+                    self.previous_addr = curr_addr;
                 }
-                return null;
+                return result;
+            }
+
+            pub fn prev(self: *Iterator) ?*Node {
+                const result: ?*Node = @ptrFromInt(self.previous_addr);
+                if (self.previous_addr != 0) {
+                    const previous: *Node = @ptrFromInt(self.previous_addr);
+                    const curr_addr = @intFromPtr(self.next_ptr);
+                    const previouser_addr = previous.xptr ^ curr_addr;
+                    self.next_ptr = previous;
+                    self.previous_addr = previouser_addr;
+                }
+                return result;
+            }
+
+            pub fn flip(self: *Iterator) void {
+                if (self.next_ptr) |next_ptr| {
+                    self.previous_addr ^= next_ptr.xptr;
+                }
             }
         };
     };
@@ -246,6 +263,20 @@ test "XorList" {
     const expected_3 = [_]i32{ 24, 6, 2, 1, 0, 1, 1, 2, 5, 999, 8 };
     while (iter.next()) |node| : (i += 1) {
         try t.expectEqual(expected_3[i], node.value);
+    }
+
+    while (iter.prev()) |node| : (i -= 1) {
+        try t.expectEqual(expected_3[i - 1], node.value);
+    }
+
+    iter = list.iterateForwards();
+    i = 0;
+    const expected_4 = [_]i32{ 24, 6, 2, 1, 0, 1, 2, 6, 24 };
+    while (iter.next()) |node| : (i += 1) {
+        try t.expectEqual(expected_4[i], node.value);
+        if (iter.next_ptr != null and iter.next_ptr.?.value == 0) {
+            iter.flip();
+        }
     }
 
     list.deinit(t.allocator);
