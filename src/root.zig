@@ -19,45 +19,55 @@ pub fn XorList(T: type) type {
 
         pub fn append(self: *XorList(T), ally: Allocator, value: T) Allocator.Error!void {
             const new_node = try ally.create(Node);
-            if (self.last) |last| {
-                last.insertBetween(new_node, null);
-                self.last = new_node;
-            } else {
+            var iter = self.iterateBackwards();
+            iter.insertBefore(new_node);
+            self.last = new_node;
+            if (self.first == null) {
                 self.first = new_node;
-                self.last = new_node;
-                new_node.xptr = 0;
             }
             new_node.value = value;
         }
 
         pub fn prepend(self: *XorList(T), ally: Allocator, value: T) Allocator.Error!void {
             const new_node = try ally.create(Node);
-            if (self.first) |first| {
-                first.insertBetween(new_node, null);
-                self.first = new_node;
-            } else {
-                self.first = new_node;
+            var iter = self.iterateForwards();
+            iter.insertBefore(new_node);
+            self.first = new_node;
+            if (self.last == null) {
                 self.last = new_node;
-                new_node.xptr = 0;
             }
             new_node.value = value;
         }
 
-        pub fn insertAfter(self: *XorList(T), ally: Allocator, node: *Node, prev_addr: usize, value: T) Allocator.Error!void {
-            if (node == self.first and prev_addr != 0) {
+        pub fn insertAfter(self: *XorList(T), ally: Allocator, iter: *Iterator, value: T) !void {
+            if (iter.next_ptr == self.first and iter.prev_addr != 0) {
                 return self.prepend(ally, value);
-            } else if (node == self.last and prev_addr != 0) {
+            } else if (iter.next_ptr == self.last and iter.prev_addr != 0) {
                 return self.append(ally, value);
             }
             const new_node = try ally.create(Node);
             new_node.value = value;
-            return node.insertAfter(new_node, prev_addr);
+            return iter.insertAfter(new_node);
+        }
+
+        pub fn insertBefore(self: *XorList(T), ally: Allocator, iter: *Iterator, value: T) !void {
+            if (iter.next_ptr == self.first and iter.prev_addr == 0) {
+                try self.prepend(ally, value);
+                iter.* = self.iterateForwards();
+            } else if (iter.next_ptr == self.last and iter.prev_addr == 0) {
+                try self.append(ally, value);
+                iter.* = self.iterateBackwards();
+            }
+            const new_node = try ally.create(Node);
+            new_node.value = value;
+            return iter.insertBefore(new_node);
         }
 
         pub fn deleteFirst(self: *XorList(T), ally: Allocator) void {
             if (self.first) |first| {
-                self.first = first.nextNode(0);
-                first.delete(ally, 0);
+                var iter = self.iterateForwards();
+                iter.delete(ally);
+                self.first = iter.next();
                 if (first == self.last) {
                     self.last = null;
                 }
@@ -66,32 +76,33 @@ pub fn XorList(T: type) type {
 
         pub fn deleteLast(self: *XorList(T), ally: Allocator) void {
             if (self.last) |last| {
-                self.last = last.nextNode(0);
-                last.delete(ally, 0);
+                var iter = self.iterateBackwards();
+                iter.delete(ally);
+                self.last = iter.next();
                 if (last == self.first) {
                     self.first = null;
                 }
             }
         }
 
-        pub fn delete(self: *XorList(T), ally: Allocator, node: *Node, prev_addr: usize) void {
-            if (node == self.first) {
+        pub fn delete(self: *XorList(T), ally: Allocator, iter: *Iterator) void {
+            if (iter.next_ptr == self.first) {
                 self.deleteFirst(ally);
-            } else if (node == self.last) {
+                iter.* = self.iterateForwards();
+            } else if (iter.next_ptr == self.last) {
                 self.deleteLast(ally);
+                iter.* = self.iterateBackwards();
             } else {
-                node.delete(ally, prev_addr);
+                iter.delete(ally);
             }
         }
 
-        pub fn findForwards(self: XorList(T), value: T) ?struct { *Node, usize } {
-            const first = self.first orelse return null;
-            return first.find(0, value);
+        pub fn findForwards(self: XorList(T), value: T) ?Iterator {
+            return self.iterateForwards().find(value);
         }
 
-        pub fn findBackwards(self: XorList(T), value: T) ?struct { *Node, usize } {
-            const last = self.last orelse return null;
-            return last.find(0, value);
+        pub fn findBackwards(self: XorList(T), value: T) ?Iterator {
+            return self.iterateBackwards().find(value);
         }
 
         pub fn iterateForwards(self: XorList(T)) Iterator {
@@ -105,76 +116,17 @@ pub fn XorList(T: type) type {
         pub const Node = struct {
             value: T,
             xptr: usize,
-
-            fn nextNode(self: Node, prev_addr: usize) ?*Node {
-                const next_addr = prev_addr ^ self.xptr;
-
-                return @ptrFromInt(next_addr);
-            }
-
-            fn insertAfter(self: *Node, node: *Node, prev_addr: usize) void {
-                const self_addr = @intFromPtr(self);
-                const node_addr = @intFromPtr(node);
-                const next_addr = prev_addr ^ self.xptr;
-
-                const next_ptr: ?*Node = @ptrFromInt(next_addr);
-
-                self.xptr ^= next_addr ^ node_addr;
-                node.xptr = self_addr ^ next_addr;
-                if (next_ptr) |n| {
-                    n.xptr ^= self_addr ^ node_addr;
-                }
-            }
-
-            fn insertBetween(self: *Node, node: *Node, next: ?*Node) void {
-                const self_addr = @intFromPtr(self);
-                const node_addr = @intFromPtr(node);
-                const next_addr = @intFromPtr(next);
-
-                self.xptr ^= next_addr ^ node_addr;
-                node.xptr = self_addr ^ next_addr;
-                if (next) |n| {
-                    n.xptr ^= self_addr ^ node_addr;
-                }
-            }
-
-            fn find(self: *Node, prev_addr: usize, value: T) ?struct { *Node, usize } {
-                var current = self;
-                var prev = prev_addr;
-                if (current.value == value) return .{ current, prev };
-                while (current.nextNode(prev)) |next| {
-                    prev = @intFromPtr(current);
-                    current = next;
-                    if (current.value == value) return .{ current, prev };
-                }
-                return null;
-            }
-
-            fn delete(self: *Node, ally: Allocator, prev_addr: usize) void {
-                const self_addr = @intFromPtr(self);
-                const next_addr = prev_addr ^ self.xptr;
-
-                const prev_ptr: ?*Node = @ptrFromInt(prev_addr);
-                const next_ptr: ?*Node = @ptrFromInt(next_addr);
-                if (prev_ptr) |n| {
-                    n.xptr ^= self_addr ^ next_addr;
-                }
-                if (next_ptr) |n| {
-                    n.xptr ^= self_addr ^ prev_addr;
-                }
-
-                ally.destroy(self);
-            }
         };
 
         pub const Iterator = struct {
             next_ptr: ?*Node,
-            previous_addr: usize,
+            prev_addr: usize,
 
+            // Iterator functions
             pub fn init(first_node: ?*Node, previous_addr: usize) Iterator {
                 return .{
                     .next_ptr = first_node,
-                    .previous_addr = previous_addr,
+                    .prev_addr = previous_addr,
                 };
             }
 
@@ -182,29 +134,87 @@ pub fn XorList(T: type) type {
                 const result = self.next_ptr;
                 if (self.next_ptr) |next_ptr| {
                     const curr_addr = @intFromPtr(next_ptr);
-                    const next_addr = self.previous_addr ^ next_ptr.xptr;
+                    const next_addr = self.prev_addr ^ next_ptr.xptr;
                     self.next_ptr = @ptrFromInt(next_addr);
-                    self.previous_addr = curr_addr;
+                    self.prev_addr = curr_addr;
                 }
                 return result;
             }
 
             pub fn prev(self: *Iterator) ?*Node {
-                const result: ?*Node = @ptrFromInt(self.previous_addr);
-                if (self.previous_addr != 0) {
-                    const previous: *Node = @ptrFromInt(self.previous_addr);
+                const result: ?*Node = @ptrFromInt(self.prev_addr);
+                if (self.prev_addr != 0) {
+                    const previous: *Node = @ptrFromInt(self.prev_addr);
                     const curr_addr = @intFromPtr(self.next_ptr);
                     const previouser_addr = previous.xptr ^ curr_addr;
                     self.next_ptr = previous;
-                    self.previous_addr = previouser_addr;
+                    self.prev_addr = previouser_addr;
                 }
                 return result;
             }
 
             pub fn flip(self: *Iterator) void {
                 if (self.next_ptr) |next_ptr| {
-                    self.previous_addr ^= next_ptr.xptr;
+                    self.prev_addr ^= next_ptr.xptr;
                 }
+            }
+
+            // Node functions
+            fn insertAfter(self: *Iterator, node: *Node) !void {
+                const parent = self.next_ptr orelse return error.Null;
+                const parent_addr = @intFromPtr(parent);
+                const node_addr = @intFromPtr(node);
+                const next_addr = self.prev_addr ^ parent.xptr;
+
+                const next_ptr: ?*Node = @ptrFromInt(next_addr);
+
+                parent.xptr ^= next_addr ^ node_addr;
+                node.xptr = parent_addr ^ next_addr;
+                if (next_ptr) |n| {
+                    n.xptr ^= parent_addr ^ node_addr;
+                }
+            }
+
+            fn insertBefore(self: *Iterator, node: *Node) void {
+                const parent_addr = @intFromPtr(self.next_ptr);
+                const node_addr = @intFromPtr(node);
+                const prev_ptr: ?*Node = @ptrFromInt(self.prev_addr);
+
+                if (self.next_ptr) |n| {
+                    n.xptr ^= self.prev_addr ^ node_addr;
+                }
+                node.xptr = parent_addr ^ self.prev_addr;
+                if (prev_ptr) |n| {
+                    n.xptr ^= parent_addr ^ node_addr;
+                }
+                self.prev_addr = node_addr;
+            }
+
+            pub fn find(self: Iterator, value: T) ?Iterator {
+                var iter = self;
+                while (iter.next_ptr) |n| {
+                    if (n.value == value) return iter;
+                    _ = iter.next();
+                }
+                return null;
+            }
+
+            fn delete(self: *Iterator, ally: Allocator) void {
+                const node = self.next_ptr orelse return;
+                const node_addr = @intFromPtr(node);
+                const next_addr = self.prev_addr ^ node.xptr;
+
+                const prev_ptr: ?*Node = @ptrFromInt(self.prev_addr);
+                const next_ptr: ?*Node = @ptrFromInt(next_addr);
+                if (prev_ptr) |n| {
+                    n.xptr ^= node_addr ^ next_addr;
+                }
+                if (next_ptr) |n| {
+                    n.xptr ^= node_addr ^ self.prev_addr;
+                }
+
+                _ = self.next();
+                ally.destroy(node);
             }
         };
     };
@@ -238,11 +248,11 @@ test "XorList" {
     }
 
     var find_res = list.findForwards(5) orelse return error.Null;
-    try t.expect(find_res.@"0".value == 5);
+    try t.expect(find_res.next_ptr.?.value == 5);
 
     const new_node = try t.allocator.create(XorList(i32).Node);
     new_node.value = 999;
-    find_res.@"0".insertAfter(new_node, find_res.@"1");
+    try find_res.insertAfter(new_node);
 
     iter = list.iterateForwards();
     const expected_2 = [_]i32{ 125, 24, 6, 2, 1, 0, 1, 1, 2, 3, 5, 999, 8, 13 };
@@ -251,10 +261,10 @@ test "XorList" {
     }
 
     find_res = list.findForwards(3) orelse return error.Null;
-    list.delete(t.allocator, find_res.@"0", find_res.@"1");
+    list.delete(t.allocator, &find_res);
 
     find_res = list.findForwards(13) orelse return error.Null;
-    list.delete(t.allocator, find_res.@"0", find_res.@"1");
+    list.delete(t.allocator, &find_res);
 
     list.deleteFirst(t.allocator);
 
@@ -290,9 +300,9 @@ test "XorList" {
     try list.append(t.allocator, 5);
     try list.append(t.allocator, 6);
     find_res = list.findForwards(5) orelse return error.Null;
-    list.delete(t.allocator, find_res.@"0", find_res.@"1");
+    list.delete(t.allocator, &find_res);
     find_res = list.findForwards(6) orelse return error.Null;
-    list.delete(t.allocator, find_res.@"0", find_res.@"1");
+    list.delete(t.allocator, &find_res);
     list.deleteFirst(t.allocator);
     list.deleteLast(t.allocator);
 }

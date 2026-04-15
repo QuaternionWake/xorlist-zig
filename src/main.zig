@@ -17,8 +17,7 @@ pub fn main() !void {
 
     var list: XorList = .empty;
     defer list.deinit(ally);
-    var curr_node: ?*XorList.Node = null;
-    var prev_addr: usize = 0;
+    var curr_node: ?XorList.Iterator = null;
     while (true) {
         try stdout.print("> ", .{});
         try stdout.flush();
@@ -86,32 +85,30 @@ pub fn main() !void {
             .delete_last => list.deleteLast(ally),
             .clear_list => list.deinit(ally),
             .find_forwards => {
-                curr_node, prev_addr = list.findForwards(arg) orelse {
+                curr_node = list.findForwards(arg) orelse {
                     try stdout.print("Value {d} not found\n", .{arg});
                     break :cmd;
                 };
             },
             .find_backwards => {
-                curr_node, prev_addr = list.findBackwards(arg) orelse {
+                curr_node = list.findBackwards(arg) orelse {
                     try stdout.print("Value {d} not found\n", .{arg});
                     break :cmd;
                 };
             },
             .clear_node => {
                 curr_node = null;
-                prev_addr = 0;
             },
             .insert_after_node => {
-                if (curr_node) |n| {
-                    try list.insertAfter(ally, n, prev_addr, arg);
+                if (curr_node) |*iter| {
+                    try list.insertAfter(ally, iter, arg);
                 } else {
                     try stdout.print("No node selected\n", .{});
                 }
             },
             .delete_node => {
-                if (curr_node) |n| {
-                    list.delete(ally, n, prev_addr);
-                    continue :cmd .clear_node;
+                if (curr_node) |*iter| {
+                    list.delete(ally, iter);
                 } else {
                     try stdout.print("No node selected\n", .{});
                 }
@@ -127,11 +124,12 @@ pub fn main() !void {
     }
 }
 
-fn printList(writer: *std.Io.Writer, list: XorList, selected: ?*XorList.Node, direction: enum { forwards, backwards }) !void {
+fn printList(writer: *std.Io.Writer, list: XorList, selected_iter: ?XorList.Iterator, direction: enum { forwards, backwards }) !void {
     var iter, const arrow = switch (direction) {
         .forwards => .{ list.iterateForwards(), "=>" },
         .backwards => .{ list.iterateBackwards(), "<=" },
     };
+    const selected = if (selected_iter) |si| si.next_ptr else null;
     if (iter.next()) |node| {
         if (node == selected) {
             try writer.print("({d})", .{node.value});
